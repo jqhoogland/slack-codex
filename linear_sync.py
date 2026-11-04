@@ -220,7 +220,9 @@ def main():
                 raise app.Error(
                     "Completion sync is not enabled. Finish the read-only check and Slack scope setup first."
                 )
-            with app.lock(app.HOME):
+            lock_home = app.HOME / "linear-completion"
+            lock_home.mkdir(exist_ok=True, mode=0o700)
+            with app.lock(lock_home):
                 linear = Linear(credential())
                 slack = None
                 if args.action != "check":
