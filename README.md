@@ -221,3 +221,40 @@ A supported Later API or a separate UI execution path is needed. Socket Mode
 can deliver checkmark events but does not supply a Later write API. Do not add
 legacy stars scopes or report a local database entry as a saved Slack to-do.
 The first intake test message already had a native to-do; it remains open.
+
+## Linear Completion Check
+
+`linear_sync.py` is a separate deterministic worker. Every five minutes it reads
+only registered Linear issues, in batches of up to 25. A completed issue causes
+it to add `white_check_mark` to the original Slack message and remove Jesse's
+`inbox_tray` reaction from that same message. It never reacts to the generated
+Linear-link reply. Canceled issues do not count as completed. The worker does
+not change native Slack to-dos, which still lack a supported API.
+
+SQLite stores the issue/message mapping, last state, successful notification,
+retry count, and errors. Successful links are not notified again after restart
+or issue reopening. Slack failures retry at most three times. An issue must
+remain completed until a check sees it. Completion by any editor counts; the
+worker checks issue state, not the identity of the editor. Linear API errors
+produce no Slack writes. No model is called, and no credential enters an agent
+prompt or subprocess environment.
+
+Setup, from this repository:
+
+1. Create a personal Linear API key in Settings, Security & access. Give it
+   read-only access to the teams with linked issues. Enter it locally with
+   `uv run python linear_sync.py credential`. Input is hidden. The key is stored
+   in macOS Keychain under `local.slack-codex`, account `linear-read`.
+2. Run `uv run python linear_sync.py check` for a read-only preview.
+3. Finish the pending Slack `reactions:write` authorization and update the user
+   token through the existing secure credential command. Review the preview
+   before setting `linear_completion_enabled` to true in local config.
+4. Start `uv run python linear_sync.py serve` only after this setup is complete.
+   A native launchd service can use the same command after review.
+
+Commands: `status` shows links and errors; `retry` resets failed pending links;
+`sync` makes one live check; `check` is read-only. Use `link ISSUE-UUID SLACK-URL`
+to register another source message. The intake skill registers future issues.
+HIRE-235 is registered. Polling is local and has no public webhook receiver.
+Linear recommends webhooks for larger integrations:
+https://linear.app/developers/rate-limiting.
