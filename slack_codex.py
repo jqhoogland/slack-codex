@@ -184,7 +184,7 @@ class Slack:
         auth = self.call("auth.test")
         if auth.get("bot_id") or not auth.get("user_id") or not auth.get("team_id"):
             raise Error("A workspace user OAuth token is required.")
-        if self.scopes is None or self.scopes != set(c["scopes"]):
+        if self.scopes is None or self.scopes - {"identify"} != set(c["scopes"]):
             raise Error(
                 "Granted scopes do not match config. Required: "
                 + ", ".join(sorted(c["scopes"]))

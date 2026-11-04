@@ -24,7 +24,7 @@ On this Mac, the command is also installed at `/Users/Jesse/.local/bin/slack-cod
 3. Leave **Bot Token Scopes** empty. No write scopes, bot user, incoming webhook, event subscription, or Socket Mode token are needed for polling.
 4. Select **Install to Workspace** and authorize with your own Slack account. Workspace policy can require a human administrator to approve the app.
 5. Return to **OAuth & Permissions**. Copy the **User OAuth Token**, which starts with `xoxp-`.
-6. Run `slack-codex credential` in your own terminal. Paste only at the hidden prompt. The command checks `auth.test`, user identity, workspace identity, and the exact scope set from the `x-oauth-scopes` response header. It stores the token in macOS Keychain. Do not put it in chat, a command argument, a file, or an environment variable.
+6. Run `slack-codex credential` in your own terminal. Paste only at the hidden prompt. The command checks `auth.test`, user identity, workspace identity, and the requested scope set from the `x-oauth-scopes` response header. It stores the token in macOS Keychain. Do not put it in chat, a command argument, a file, or an environment variable.
 
 | Conversation Type | User Scope |
 |---|---|
@@ -33,7 +33,7 @@ On this Mac, the command is also installed at `/Users/Jesse/.local/bin/slack-cod
 | Direct messages | `im:history` |
 | Group direct messages | `mpim:history` |
 
-The initial configuration requests all four history scopes plus `reactions:read`. To reduce access, edit `scopes` in the local configuration before entering a token with the same reduced scope set. Extra scopes are rejected. No Slack write permission is accepted.
+The initial configuration requests all four history scopes plus `reactions:read`. To reduce access, edit `scopes` in the local configuration before entering a token with the same reduced scope set. Slack can add the implicit `identify` scope. The check accepts this documented identity scope and rejects all other extra scopes. No Slack write permission is accepted.
 
 A user token can access public conversations and private conversations its user belongs to, within its scopes. Retention, deletion, workspace policy, and changes to membership can prevent retrieval. This program does not join channels or invite a bot. File attachments are included as message metadata when Slack returns them; their contents are not downloaded.
 
@@ -150,3 +150,5 @@ Tests use fake Slack responses and small local child programs. They spend no mod
 - [Slack OAuth](https://docs.slack.dev/authentication/installing-with-oauth/): user-scoped tokens.
 - [Slack rate limits](https://docs.slack.dev/apis/web-api/rate-limits/): per-method limits and Retry-After.
 - [Codex noninteractive mode](https://learn.chatgpt.com/docs/non-interactive-mode): CLI execution, stdin, sandbox flags, and saved output.
+
+Slack adds [identify](https://docs.slack.dev/reference/scopes/identify/) in the background for user tokens. The live installation returned this scope with the five requested read scopes.

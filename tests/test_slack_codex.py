@@ -299,6 +299,14 @@ class Tests(unittest.TestCase):
         with self.assertRaisesRegex(app.Error, "uncertain outcome"):
             app.run_one(self.home, self.c, FakeSlack([]), self.db)
 
+    def test_identity_accepts_implicit_identify_and_rejects_write_scope(self):
+        client = FakeSlack([{"user_id": "U1", "team_id": "T1"}] * 2)
+        client.scopes = set(app.SCOPES) | {"identify"}
+        self.assertEqual(client.identity(self.c)["user_id"], "U1")
+        client.scopes.add("chat:write")
+        with self.assertRaises(app.Error):
+            client.identity(self.c)
+
     def test_no_write_api(self):
         with self.assertRaises(app.Error):
             app.Slack("unused").call("chat.postMessage")
