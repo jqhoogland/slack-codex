@@ -205,3 +205,19 @@ The first full poll establishes a separate baseline for inbox reactions.
 Existing inbox reactions do not start tasks without an explicit test or rerun.
 The Slack OAuth token still has only read scopes. Desktop completion replies use
 the connected Slack app; no additional OAuth scope has been granted to the worker.
+
+## Requested To-do Behavior
+
+Jesse wants inbox intake to add the selected message to his Slack to-dos.
+A `white_check_mark` reaction on that message, including a reaction from another
+agent, should complete its to-do. Issue intake alone must not add a checkmark:
+it creates a task to do, and does not complete that task. The reaction worker
+now removes only the work marker when Linear intake completes.
+
+Automatic native to-do sync is not implemented. Slack's official stars API does
+not affect Later, and the connected Slack tools cannot add or complete native
+to-dos. See https://docs.slack.dev/changelog/2023-07-its-later-already-for-stars-and-reminders/.
+A supported Later API or a separate UI execution path is needed. Socket Mode
+can deliver checkmark events but does not supply a Later write API. Do not add
+legacy stars scopes or report a local database entry as a saved Slack to-do.
+The first intake test message already had a native to-do; it remains open.

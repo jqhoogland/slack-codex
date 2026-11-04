@@ -348,7 +348,7 @@ def sync_reactions(db, c, slack):
     if not c.get("status_reactions"):
         return
     rows = db.execute(
-        """SELECT r.*,j.channel,j.ts FROM reaction_updates r
+        """SELECT r.*,j.channel,j.ts,j.workflow FROM reaction_updates r
                          JOIN jobs j ON j.id=r.job
                          WHERE r.attempts<3 AND r.next_try<=? AND j.team=? AND j.user=?""",
         (time.time(), c["team_id"], c["user_id"]),
@@ -370,12 +370,14 @@ def sync_reactions(db, c, slack):
                     name="codex_working",
                 )
             else:
-                slack.call(
-                    "reactions.add",
-                    channel=row["channel"],
-                    timestamp=row["ts"],
-                    name="white_check_mark",
-                )
+                # Intake completion does not mean the underlying task is done.
+                if json.loads(row["workflow"]).get("action") != "linear_intake":
+                    slack.call(
+                        "reactions.add",
+                        channel=row["channel"],
+                        timestamp=row["ts"],
+                        name="white_check_mark",
+                    )
                 slack.call(
                     "reactions.remove",
                     channel=row["channel"],
