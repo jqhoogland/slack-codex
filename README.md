@@ -174,3 +174,5 @@ The OpenAI Blossom belongs to OpenAI. The source SVG comes from the [OpenAI Cook
 ```sh
 uv run --with pillow --with cairosvg env DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib python scripts/make_emoji.py
 ```
+
+Additional Slack emoji: `claude_working` is a rotating Anthropic lettermark. `claude_static` and `codex_static` are still logos. The Anthropic vector comes from [Simple Icons](https://github.com/simple-icons/simple-icons/blob/develop/icons/anthropic.svg); the mark belongs to Anthropic. These emoji do not add a Claude workflow.
