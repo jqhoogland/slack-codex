@@ -1,51 +1,47 @@
-"""Create a small robot with a rotating progress ring for Slack."""
+"""Render the OpenAI Blossom as a rotating Slack status emoji."""
 
-import math
+from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+import cairosvg
+from PIL import Image
 
 out = Path(__file__).resolve().parents[1] / "assets"
-out.mkdir(exist_ok=True)
+source = Image.open(
+    BytesIO(cairosvg.svg2png(url=str(out / "openai-blossom.svg")))
+).convert("RGBA")
+source = source.crop(source.getbbox())
+source.thumbnail((408, 408), Image.Resampling.LANCZOS)
+canvas = Image.new("RGBA", (512, 512))
+canvas.alpha_composite(source, ((512 - source.width) // 2, (512 - source.height) // 2))
 frames = []
-for frame in range(24):
-    im = Image.new("RGB", (128, 128), (255, 0, 255))
-    draw = ImageDraw.Draw(im)
-    for dot in range(12):
-        angle = 2 * math.pi * (dot / 12 + frame / 24)
-        x, y = 64 + 53 * math.cos(angle), 64 + 53 * math.sin(angle)
-        color = (12 + dot * 2, 90 + dot * 9, 110 + dot * 10)
-        draw.ellipse((x - 5, y - 5, x + 5, y + 5), fill=color)
-    draw.line((64, 31, 64, 42), fill="#142c3b", width=5)
-    draw.ellipse((59, 26, 69, 36), fill="#10a37f")
-    draw.rounded_rectangle((29, 40, 99, 94), radius=13, fill="#142c3b")
-    draw.rounded_rectangle((34, 45, 94, 89), radius=9, fill="#f4fbff")
-    draw.ellipse((43, 56, 53, 66), fill="#142c3b")
-    draw.ellipse((75, 56, 85, 66), fill="#142c3b")
-    draw.rounded_rectangle((46, 76, 82, 81), radius=2, fill="#10a37f")
-    im = im.convert("P", palette=Image.Palette.ADAPTIVE, colors=64)
-    palette = im.getpalette()
-    transparent = next(
-        i for i in range(256) if palette[i * 3 : i * 3 + 3] == [255, 0, 255]
+for frame in range(40):
+    rotated = canvas.rotate(-frame * 9, Image.Resampling.BICUBIC).resize(
+        (128, 128), Image.Resampling.LANCZOS
     )
-    im.info["transparency"] = transparent
-    frames.append(im)
+    # GIF has binary transparency. Use a fixed palette to keep each frame stable.
+    alpha = rotated.getchannel("A")
+    result = Image.new("P", (128, 128), 0)
+    result.putpalette([255, 255, 255, 0, 0, 0] + [0, 0, 0] * 254)
+    result.paste(1, mask=alpha.point(lambda value: 255 if value >= 96 else 0))
+    result.info["transparency"] = 0
+    frames.append(result)
 frames[0].save(
     out / "codex_working.gif",
     save_all=True,
     append_images=frames[1:],
-    duration=80,
+    duration=50,
     loop=0,
+    transparency=0,
     disposal=2,
     optimize=False,
 )
-with Image.open(out / "codex_working.gif") as preview:
-    preview.convert("RGBA").save(out / "codex_working-preview.png")
 with Image.open(out / "codex_working.gif") as gif:
-    assert gif.size == (128, 128) and gif.n_frames == 24
+    assert gif.size == (128, 128) and gif.n_frames == 40
+    gif.convert("RGBA").save(out / "codex_working-preview.png")
 assert (out / "codex_working.gif").stat().st_size < 128 * 1024
 print(
-    "Created codex_working.gif:",
+    "Created 40-frame clockwise rotation, 2 seconds per turn:",
     (out / "codex_working.gif").stat().st_size,
-    "bytes; 24 frames; 128 x 128",
+    "bytes",
 )

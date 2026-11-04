@@ -155,7 +155,7 @@ Slack adds [identify](https://docs.slack.dev/reference/scopes/identify/) in the 
 
 ## Optional Progress Markers
 
-The custom emoji `codex_working` means **Codex work in progress**. Its animated robot and rotating ring are in `assets/codex_working.gif`. The source is `scripts/make_emoji.py`.
+The custom emoji `codex_working` means **Codex work in progress**. Its rotating OpenAI Blossom logo is in `assets/codex_working.gif`. The source is `scripts/make_emoji.py`.
 
 After the user approves `reactions:write` and reinstalls the Slack app, store the updated token. Add that scope to the local `scopes` list and set `status_reactions` to true. These changes require a new dry run and approval before the service starts.
 
@@ -168,3 +168,9 @@ Reaction updates use their own SQLite queue. They retry up to three times withou
 The selected live task was created in the local desktop project named **Slack**, with working folder `/Users/Jesse/Projects/resolution`. The configuration records its project ID. Job 1 is marked `dispatched` and linked to that chat, which prevents a second automatic launch.
 
 The current CLI worker does not yet apply this desktop project ID to future sessions. Its documented launch options set the working folder but do not select a named desktop project. Background activation stays paused until project routing is implemented and verified. Do not treat the stored project ID as proof that automatic routing works.
+
+The OpenAI Blossom belongs to OpenAI. The source SVG comes from the [OpenAI Cookbook](https://github.com/openai/openai-cookbook/blob/main/examples/voice_solutions/realtime_translation_guide/livekit-translation-demo/public/brand/chatgpt-blossom-black.svg). The GIF rotates clockwise once every two seconds. To rebuild it on this Mac:
+
+```sh
+uv run --with pillow --with cairosvg env DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib python scripts/make_emoji.py
+```
