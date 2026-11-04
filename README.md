@@ -176,3 +176,32 @@ uv run --with pillow --with cairosvg env DYLD_FALLBACK_LIBRARY_PATH=/opt/homebre
 ```
 
 Additional Slack emoji: `claude_working` is a rotating Anthropic lettermark. `claude_static` and `codex_static` are still logos. The Anthropic vector comes from [Simple Icons](https://github.com/simple-icons/simple-icons/blob/develop/icons/anthropic.svg); the mark belongs to Anthropic. These emoji do not add a Claude workflow.
+
+## Inbox Intake
+
+Jesse's `inbox_tray` reaction selects the `slack-to-linear` skill. The agent uses
+connected Linear tools to select the team and project, check for an existing
+issue, save useful task details and the Slack source link, and verify the issue.
+It then sends one AI4-labeled reply in the containing Slack thread with the issue
+link. This authorizes intake only, not execution of the task in the message.
+
+The configured chat destination is the desktop **Linear** project
+(`baebc3b6-29be-4612-a563-37828ca8d2c9`). Its local folder is this repository.
+This workflow requires desktop connected apps. The CLI runner stops before
+launching it. Automatic desktop dispatch is not implemented, so this mapping
+is configured but not live. The background service remains off.
+
+A live read-only preview uses:
+
+```sh
+slack-codex dry-run CHANNEL MESSAGE_TIMESTAMP --emoji inbox_tray
+```
+
+The saved review includes the full context, standing prompt, and destination
+project ID. Its CLI command is null because the CLI does not provide this
+execution path. An authorized desktop chat can use this review and the installed
+skill for a manual test. Record its chat ID and outcome in the SQLite run log.
+The first full poll establishes a separate baseline for inbox reactions.
+Existing inbox reactions do not start tasks without an explicit test or rerun.
+The Slack OAuth token still has only read scopes. Desktop completion replies use
+the connected Slack app; no additional OAuth scope has been granted to the worker.
