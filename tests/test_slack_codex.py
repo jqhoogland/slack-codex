@@ -219,13 +219,21 @@ class Tests(unittest.TestCase):
         self.prepare_job()
         fake = self.home / "fake.py"
         fake.write_text(
-            'import os,sys,json\np=sys.stdin.read()\nassert "$(touch /tmp/should-not-exist)" in p\nassert "SLACK_TOKEN" not in os.environ\nprint(json.dumps({"type":"thread.started","thread_id":"test-thread"}))\n'
+            'import os,sys,json\nfrom pathlib import Path\nPath(sys.argv[1]).write_text(json.dumps({"status":"completed","summary":"Done"}))\np=sys.stdin.read()\nassert "$(touch /tmp/should-not-exist)" in p\nassert "SLACK_TOKEN" not in os.environ\nprint(json.dumps({"type":"thread.started","thread_id":"test-thread"}))\n'
         )
         m = message(text_override="unused")
         m["text"] = "$(touch /tmp/should-not-exist)"
         s = FakeSlack([{"message": m}, {"messages": [m]}])
         with (
-            patch.object(app, "command", return_value=[sys.executable, str(fake)]),
+            patch.object(
+                app,
+                "command",
+                return_value=[
+                    sys.executable,
+                    str(fake),
+                    str(self.home / "runs/1/answer.md"),
+                ],
+            ),
             patch.dict(os.environ, {"SLACK_TOKEN": "test-secret"}),
         ):
             self.assertTrue(app.run_one(self.home, self.c, s, self.db))
@@ -306,6 +314,45 @@ class Tests(unittest.TestCase):
         client.scopes.add("chat:write")
         with self.assertRaises(app.Error):
             client.identity(self.c)
+
+    def test_status_reactions_persist_and_retry_without_relaunch(self):
+        self.c["status_reactions"] = True
+        app.discover(self.db, self.c, {})
+        app.discover(self.db, self.c, {("C1", "1.000001", "robot_face"): {}})
+        self.assertEqual(
+            self.db.execute("SELECT desired FROM reaction_updates").fetchone()[0],
+            "working",
+        )
+        failed = FakeSlack([app.Error("offline")])
+        app.sync_reactions(self.db, self.c, failed)
+        self.assertEqual(
+            self.db.execute("SELECT attempts FROM reaction_updates").fetchone()[0], 1
+        )
+        with self.db:
+            self.db.execute("UPDATE reaction_updates SET next_try=0")
+        success = FakeSlack([{"ok": True}, {"ok": True}])
+        app.sync_reactions(self.db, self.c, success)
+        self.assertEqual(
+            [x[0] for x in success.requests], ["reactions.remove", "reactions.add"]
+        )
+        self.assertEqual(self.db.execute("SELECT count(*) FROM runs").fetchone()[0], 0)
+        self.assertEqual(
+            self.db.execute("SELECT count(*) FROM reaction_updates").fetchone()[0], 0
+        )
+        with self.db:
+            app.queue_reaction(self.db, 1, "done")
+        complete = FakeSlack([{"ok": True}, {"ok": True}])
+        app.sync_reactions(self.db, self.c, complete)
+        self.assertEqual(complete.requests[0][1]["name"], "white_check_mark")
+        self.assertEqual(complete.requests[1][1]["name"], "codex_working")
+
+    def test_reaction_status_disabled_makes_no_writes(self):
+        self.prepare_job()
+        with self.db:
+            app.queue_reaction(self.db, 1, "working")
+        slack = FakeSlack([])
+        app.sync_reactions(self.db, self.c, slack)
+        self.assertEqual(slack.requests, [])
 
     def test_no_write_api(self):
         with self.assertRaises(app.Error):

@@ -21,7 +21,7 @@ On this Mac, the command is also installed at `/Users/Jesse/.local/bin/slack-cod
 
 1. Open [Your Apps](https://api.slack.com/apps). Select **Create New App**, then **From scratch**. Name it **Local Codex Reactions** and select your workspace.
 2. Open **OAuth & Permissions**. Under **User Token Scopes**, add `reactions:read` and the history scopes below for the conversation types you need.
-3. Leave **Bot Token Scopes** empty. No write scopes, bot user, incoming webhook, event subscription, or Socket Mode token are needed for polling.
+3. Leave **Bot Token Scopes** empty. No write scopes, bot user, incoming webhook, event subscription, or Socket Mode token are needed for polling. Add `reactions:write` only when you enable the optional status markers.
 4. Select **Install to Workspace** and authorize with your own Slack account. Workspace policy can require a human administrator to approve the app.
 5. Return to **OAuth & Permissions**. Copy the **User OAuth Token**, which starts with `xoxp-`.
 6. Run `slack-codex credential` in your own terminal. Paste only at the hidden prompt. The command checks `auth.test`, user identity, workspace identity, and the requested scope set from the `x-oauth-scopes` response header. It stores the token in macOS Keychain. Do not put it in chat, a command argument, a file, or an environment variable.
@@ -33,7 +33,7 @@ On this Mac, the command is also installed at `/Users/Jesse/.local/bin/slack-cod
 | Direct messages | `im:history` |
 | Group direct messages | `mpim:history` |
 
-The initial configuration requests all four history scopes plus `reactions:read`. To reduce access, edit `scopes` in the local configuration before entering a token with the same reduced scope set. Slack can add the implicit `identify` scope. The check accepts this documented identity scope and rejects all other extra scopes. No Slack write permission is accepted.
+The initial configuration requests all four history scopes plus `reactions:read`. To reduce access, edit `scopes` in the local configuration before entering a token with the same reduced scope set. Slack can add the implicit `identify` scope. The check accepts this documented identity scope and rejects all other extra scopes. The initial setup accepts no Slack write permission. Optional progress markers use only the user scope `reactions:write`, after explicit approval and reinstallation.
 
 A user token can access public conversations and private conversations its user belongs to, within its scopes. Retention, deletion, workspace policy, and changes to membership can prevent retrieval. This program does not join channels or invite a bot. File attachments are included as message metadata when Slack returns them; their contents are not downloaded.
 
@@ -107,7 +107,7 @@ All runtime data is under `~/Library/Application Support/slack-codex/`, outside 
 | `state.sqlite3` | Job keys, statuses, attempts, errors, and run history |
 | `reviews/` | Live dry-run context and exact launch preview |
 | `approval.json` | Approved review and configuration digest |
-| `runs/` | Context, prompt, output events, final answer, error log |
+| `runs/` | Context, prompt, output events, final structured answer, error log |
 | `service.log` | Poll results and controlled operational errors |
 
 The launchd file is `~/Library/LaunchAgents/local.slack-codex.plist`. It contains no token. The service starts after user login only when loaded. This program does not publish a remote repository.
@@ -152,3 +152,19 @@ Tests use fake Slack responses and small local child programs. They spend no mod
 - [Codex noninteractive mode](https://learn.chatgpt.com/docs/non-interactive-mode): CLI execution, stdin, sandbox flags, and saved output.
 
 Slack adds [identify](https://docs.slack.dev/reference/scopes/identify/) in the background for user tokens. The live installation returned this scope with the five requested read scopes.
+
+## Optional Progress Markers
+
+The custom emoji `codex_working` means **Codex work in progress**. Its animated robot and rotating ring are in `assets/codex_working.gif`. The source is `scripts/make_emoji.py`.
+
+After the user approves `reactions:write` and reinstalls the Slack app, store the updated token. Add that scope to the local `scopes` list and set `status_reactions` to true. These changes require a new dry run and approval before the service starts.
+
+A newly received job queues a progress marker. The worker removes an earlier completion mark and adds `codex_working`. On a completed result, it adds `white_check_mark` and removes `codex_working`. Failed, blocked, interrupted, and timed-out work retains the progress marker. Only your own reactions can be removed with your user token.
+
+Reaction updates use their own SQLite queue. They retry up to three times without rerunning the agent. The agent must return a structured result with `status` equal to `completed`, `blocked`, or `failed`. A successful process exit alone cannot produce a completion mark. The Slack methods remain restricted to reads plus `reactions.add` and `reactions.remove`; message posting is unavailable.
+
+## Desktop Project Routing Status
+
+The selected live task was created in the local desktop project named **Slack**, with working folder `/Users/Jesse/Projects/resolution`. The configuration records its project ID. Job 1 is marked `dispatched` and linked to that chat, which prevents a second automatic launch.
+
+The current CLI worker does not yet apply this desktop project ID to future sessions. Its documented launch options set the working folder but do not select a named desktop project. Background activation stays paused until project routing is implemented and verified. Do not treat the stored project ID as proof that automatic routing works.
