@@ -1,4 +1,4 @@
-"""Local reaction polling. Only the worker command can start Codex."""
+"""Local Slack workflow configuration, history reads, and command interface."""
 
 from __future__ import annotations
 
@@ -79,7 +79,16 @@ def digest(c):
     content = {
         "config": c,
         "skills": {k: Path(v["skill"]).read_text() for k, v in c["workflows"].items()},
-        "program": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "program": {
+            name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+            for name in (
+                "slack_codex.py",
+                "event_worker.py",
+                "codex_rpc.py",
+                "chat_archive.py",
+            )
+            if (ROOT / name).exists()
+        },
         "result_schema": (ROOT / "result-schema.json").read_text(),
     }
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
@@ -450,7 +459,7 @@ def prompt(workflow, context):
         "with its link in the source Slack thread, following the local skill. "
         "Do not execute the task described in Slack or send email. "
         if workflow.get("action") == "linear_intake"
-        else "Do not post messages, add reactions, or send email. "
+        else "Jesse delegated this selected request. Carry out its clear implied actions and reply in the source Slack thread, following the local skill. Ask Jesse when the intended work or a material choice is unclear. "
     )
     return (
         "Standing task instructions from the local workflow configuration:\n"
@@ -492,7 +501,7 @@ def run_one(home, c, slack, db, job_id=None, stop=None):
             "Automatic desktop project routing is not implemented. Use the desktop app to start the chat."
         )
     if not approved(home, c):
-        raise Error("A successful live dry run and user approval are required.")
+        raise Error("A successful live dry run is required.")
     if db.execute("SELECT 1 FROM meta WHERE key='recovery_hold'").fetchone():
         raise Error(
             "An earlier launch has an uncertain outcome. Inspect it, then use clear-recovery."
@@ -679,12 +688,12 @@ def service(action, home, c):
         plist.chmod(0o600)
         print("Service file installed. The service is not loaded.")
     elif action == "resume":
-        if c.get("desktop_project_id"):
+        if c.get("desktop_project_id") and c.get("transport") != "socket-mode":
             raise Error(
                 "Automatic desktop project routing needs verification before activation."
             )
         if not approved(home, c):
-            raise Error("Review a live dry run and run approve before resume.")
+            raise Error("Run a successful live dry run before resume.")
         subprocess.run(["launchctl", "bootstrap", domain, str(plist)], check=True)
     else:
         result = subprocess.run(
@@ -800,6 +809,29 @@ def main():
             Keyring().delete_password(SERVICE, "slack-user")
         elif action in ("install-service", "pause", "resume", "uninstall"):
             service(action, home, c)
+        elif action == "serve" and c.get("transport") == "socket-mode":
+            from event_worker import serve
+
+            with lock(home):
+                serve(home, c)
+        elif action == "run-job" and c.get("transport") == "socket-mode":
+            from event_worker import run_one as run_event_job
+
+            with lock(home):
+                job = db.execute(
+                    "SELECT emoji FROM jobs WHERE id=? AND status='queued'", (args.job,)
+                ).fetchone()
+                if not job:
+                    raise Error("Use rerun to queue this job first.")
+                run_event_job(
+                    home,
+                    c,
+                    db,
+                    Slack(token()),
+                    job["emoji"],
+                    threading.Event(),
+                    job_id=args.job,
+                )
         elif action == "clear-recovery":
             with lock(home), db:
                 db.execute("DELETE FROM meta WHERE key='recovery_hold'")
@@ -808,7 +840,8 @@ def main():
             print(
                 json.dumps(
                     {
-                        "approved": approved(home, c),
+                        "validated": approved(home, c),
+                        "transport": c.get("transport", "polling"),
                         "meta": dict(db.execute("SELECT key,value FROM meta")),
                         "jobs": [
                             dict(x)
@@ -842,7 +875,7 @@ def main():
                     "approved_at": time.time(),
                 },
             )
-            print("Review approval saved. The service remains stopped until resume.")
+            print("Validation saved. The service remains stopped until resume.")
         elif action == "rerun":
             with db:
                 db.execute("BEGIN IMMEDIATE")
@@ -899,6 +932,14 @@ def main():
                         "created": time.time(),
                     },
                 )
+                save(
+                    home / "approval.json",
+                    {
+                        "digest": digest(c),
+                        "review": review,
+                        "validated_at": time.time(),
+                    },
+                )
                 print(json.dumps({"review": review, "context": context}, indent=2))
                 print("Read-only dry run complete. No Codex agent was started.")
             else:
@@ -911,7 +952,7 @@ def main():
                         print("Full scan saved. No Codex agent was started.")
                     elif action == "serve":
                         if not approved(home, c):
-                            raise Error("Service needs approval of a live dry run.")
+                            raise Error("Service needs a successful live dry run.")
                         if db.execute(
                             "SELECT 1 FROM meta WHERE key='recovery_hold'"
                         ).fetchone():
@@ -950,7 +991,7 @@ def main():
                                 if digest(config(home)) != digest(c):
                                     stop.set()
                                     raise Error(
-                                        "Configuration changed. Pause, dry-run, and approve again."
+                                        "Configuration changed. Pause, run dry-run, and resume."
                                     )
                                 discover(db, c, slack.matches(c))
                                 elapsed = time.monotonic() - started

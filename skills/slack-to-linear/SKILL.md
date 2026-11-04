@@ -19,28 +19,21 @@ After verification, read the Slack thread again. If a completion reply already l
 
 Mark the task complete only after both issue verification and Slack reply succeed. If the issue exists but the reply fails, report its URL and the reply failure in the agent chat. Resume with the reply; do not recreate the issue. The local worker owns status reactions. Do not add a checkmark merely because issue intake succeeded: Jesse uses a checkmark to mean the underlying task is complete and to clear its Slack to-do. Leave that to-do open after issue creation.
 
-After issue verification, register the completion link with `uv run python /Users/Jesse/Projects/slack-codex/linear_sync.py link ISSUE-UUID SOURCE-SLACK-PERMALINK`. Use the original selected message permalink, never the agent completion reply. This only records a local link; it does not change Slack. If registration fails, report it with the issue URL and do not recreate the issue. The completion worker adds a checkmark and removes Jesse's inbox reaction on that original message when Linear reports completed.
+After issue verification, call `register_linear_issue` with the issue UUID. The local tool binds it to the original selected Slack message. This records the link without a Slack write and does not expose credentials. If this tool is unavailable, use `uv run python /Users/Jesse/Projects/slack-codex/linear_sync.py link ISSUE-UUID SOURCE-SLACK-PERMALINK`. Report a registration failure without recreating the issue. The completion worker adds a checkmark and removes Jesse's inbox reaction when Linear reports completed.
 
 
 ## Archive This Chat After Completion
 
-After this chat completes all requested work, schedule an archive check from
-this chat with the app automation tool. Use a heartbeat with destination thread.
-This is Jesse's standing instruction. Never schedule it in the parent chat or
-scan other chats. Update an existing archive check for this chat if one exists.
+After all requested work and the required Slack reply succeed, call
+`schedule_chat_archive` for this chat. The local worker records completion
+only after the turn finishes with status completed. A deterministic program
+then checks for 24 hours without further activity and archives the chat.
+It uses no model tokens. Do not create a heartbeat or wake a model to check.
 
-Record this chat's ID, the task completion time, and the most recent substantive
-user or assistant activity. Schedule the check for 24 hours after the later
-of those times. At the check, read this chat again. Archive it with
-set_thread_archived only if its task is still complete and there has been no
-further substantive activity for 24 hours. A completed model turn alone does
-not mean the task is complete. Pending questions, approvals, failures, or
-ongoing work prevent archival.
+Do not register completion while a question, approval, failure, or task is
+still open. Further activity cancels the old completion record. Register again
+when the new work is complete. Never archive other chats or delete files.
 
-New user messages or further task work reset the 24-hour period. Reschedule
-from the later activity time if the task remains complete. If work reopened,
-stop the pending check and schedule a new one when that work completes.
-The archive check itself does not reset the inactivity period. Disable the
-check after successful archival. Stay quiet unless archival fails or needs
-user action. Do not delete files or worktrees. If scheduling tools are not
-available, report that limit instead of claiming archival is scheduled.
+If the local tool is unavailable in an interactive continuation, run
+`uv run python /Users/Jesse/Projects/slack-codex/chat_archive.py complete CHAT_ID`
+after the work is complete, or report that registration still needs to be done.

@@ -1,260 +1,204 @@
 # Slack Codex
 
-A personal, local Slack reaction worker for macOS. Python polls Slack without a model. Only a new configured reaction can queue a Codex run. The default mapping is `robot_face` to the `respond-to-queries` skill in the Resolution project.
+Local Slack reaction workflows for Jesse. A deterministic Socket Mode listener
+receives user reaction events and saves jobs in SQLite. Listening, reconnect
+scans, Linear completion checks, and archive checks use no model tokens.
+Only a new matching reaction or an explicit rerun starts an agent.
 
-## Installation
+## Workflows
 
-Use Python 3.11 or later through uv. Install Codex CLI and sign in with `codex login`.
+| Reaction | Skill | App Project | Working Folder |
+|---|---|---|---|
+| 🤖 `robot_face` | [Respond to queries](skills/respond-to-queries/SKILL.md) | Slack | `/Users/Jesse/Projects/resolution` |
+| 📥 `inbox_tray` | [Slack to Linear](skills/slack-to-linear/SKILL.md) | Linear | `/Users/Jesse/Projects/slack-codex` |
+
+The query skill carries out clear implied actions and replies in the selected
+Slack thread. It asks Jesse about material ambiguity. The intake skill finds
+or creates the right Linear issue and posts one short linked receipt. Both
+apply Jesse's AI4 rule to replies sent without review of the exact text.
+
+Each workflow has one agent slot. The two workflows can run at the same time.
+More requests for one workflow wait in its queue. Each run has a 30-minute
+limit by default. Existing sandbox and tool approval rules still apply. If a
+run needs approval, it stops with a saved chat that Jesse can continue in the app.
+
+The worker adds `codex_working` on the original selected message. It adds
+`white_check_mark` after a query and its required reply succeed. Issue intake
+only removes the working marker: creating an issue does not complete the task.
+The separate Linear worker checks every five minutes. When the linked issue
+is completed, it adds a checkmark and removes `inbox_tray` on the original
+message, not the receipt. Canceled issues do not count as completed.
+
+## Event Delivery
+
+The Slack app is **Local Codex Reactions**, ID `A0CF1GM2FA8`, in Resolution.
+Socket Mode is enabled with the user event `reaction_added`. It does not need
+a public HTTP endpoint or per-channel bot invitations. An app token with
+`connections:write` supplies the event connection. A user OAuth token fetches
+messages and threads.
+
+The listener checks workspace, app ID, reacting user ID, emoji, and message
+item type. It uses `event.user`, not the message author. It commits matching
+events before acknowledging them. Unique message/emoji keys prevent duplicate
+runs across event retries, restarts, and removal followed by re-addition.
+Message timestamps never serve as reaction timestamps.
+
+A first full scan establishes a baseline for each emoji without launching old
+items. Scans on startup and reconnection catch reactions that remain present
+after an outage. They run separately from live event handling. There is no
+60-second reaction poll. Slack delayed delivery is enabled, but offline delivery
+is not guaranteed indefinitely. An added and removed reaction during an outage
+can still be missed if Slack cannot deliver its event.
+
+The listener must run on an awake, online Mac. A live test received the Slack
+event in about 0.3 seconds. Chat startup also needs message retrieval and Codex
+startup. API throttling, a busy workflow slot, or a disconnected Mac can delay it.
+
+## Codex Chats and Permissions
+
+The installed Codex CLI, version 0.164.0, exposes project assignment through
+its experimental app-server protocol. The worker uses `codex app-server` over
+stdin with `thread/start`, `projectId`, and `turn/start`. The project IDs from
+that protocol differ from the app tools' saved-project IDs; configuration stores
+both. Each chat is persistent and visible in the app. Live checks verified both
+project destinations and the connected Slack and Linear tools.
+
+Each chat receives an explicit folder, `read-only` sandbox, and `on-request`
+approval policy with a human reviewer. No bypass flag or automatic approval
+setting is used. Connected app tools remain available. Shell network access
+stays off. Unrelated configured local MCP servers are disabled for these runs.
+
+Slack text is JSON task data. It never enters shell interpolation. Standing
+workflow instructions define authority. The worker passes no Slack or Linear
+secret through prompts, arguments, or the agent environment. Credentials stay
+in Keychain. The processes still run as Jesse; this is not a separate OS account.
+
+Fetch errors retry at most three times. Once a model run starts, it is never
+automatically repeated. A crash or uncertain outcome requires inspection and an
+explicit rerun. The chat ID is saved as soon as Codex creates it. Output and
+errors are saved for each run.
+
+## Deterministic Chat Archival
+
+Both skills call `schedule_chat_archive` in their own spawned chat. The local
+program registers completion only after that turn reports `completed`. It
+checks due records every five minutes and archives after 24 hours without new
+activity. These checks make no model call and create no heartbeat in the parent
+chat. Active chats are never archived.
+
+New activity invalidates the old completion record. The skill registers again
+when the new work is complete. This prevents a reopened or blocked task from
+being archived just because a model turn ended. The check reads activity twice
+before archival, but the app API offers no atomic conditional archive operation.
+
+The local `register_linear_issue` tool similarly saves the verified issue UUID
+against the original message. It exposes neither a credential nor a Slack write.
+
+For an interactive continuation without these local tools:
 
 ```sh
-uv sync --locked
-uv run slack-codex init --project /Users/Jesse/Projects/resolution
-uv run slack-codex credential
-uv run slack-codex install-service
+uv run python chat_archive.py complete CHAT_ID
+uv run python chat_archive.py cancel CHAT_ID
+uv run python chat_archive.py status
+uv run python linear_sync.py link ISSUE_UUID SOURCE_SLACK_PERMALINK
 ```
 
-Run these commands from the repository. `init` refuses to replace existing configuration. `credential` requires a local terminal with hidden input. The service installation writes a launchd file but does not load it.
+Use `complete` only after the chat's task is actually complete. The automatic
+path registers after the final turn, so it needs no extra model wakeup.
 
-On this Mac, the command is also installed at `/Users/Jesse/.local/bin/slack-codex`.
+## Local Files and Controls
 
-## Slack App Setup
+Repository: `/Users/Jesse/Projects/slack-codex`.
+Runtime data: `~/Library/Application Support/slack-codex/`.
+New runtime files have owner-only permissions.
 
-1. Open [Your Apps](https://api.slack.com/apps). Select **Create New App**, then **From scratch**. Name it **Local Codex Reactions** and select your workspace.
-2. Open **OAuth & Permissions**. Under **User Token Scopes**, add `reactions:read` and the history scopes below for the conversation types you need.
-3. Leave **Bot Token Scopes** empty. No write scopes, bot user, incoming webhook, event subscription, or Socket Mode token are needed for polling. Add `reactions:write` only when you enable the optional status markers.
-4. Select **Install to Workspace** and authorize with your own Slack account. Workspace policy can require a human administrator to approve the app.
-5. Return to **OAuth & Permissions**. Copy the **User OAuth Token**, which starts with `xoxp-`.
-6. Run `slack-codex credential` in your own terminal. Paste only at the hidden prompt. The command checks `auth.test`, user identity, workspace identity, and the requested scope set from the `x-oauth-scopes` response header. It stores the token in macOS Keychain. Do not put it in chat, a command argument, a file, or an environment variable.
-
-| Conversation Type | User Scope |
+| Path | Contents |
 |---|---|
-| Public channels | `channels:history` |
-| Private channels | `groups:history` |
-| Direct messages | `im:history` |
-| Group direct messages | `mpim:history` |
+| `config.json` | Emoji mappings, user/workspace IDs, projects, limits |
+| `state.sqlite3` | Events, jobs, attempts, runs, issue links, archive records |
+| `reviews/` | Read-only thread previews |
+| `approval.json` | Successful validation record, legacy filename |
+| `runs/` | Context, prompt, events, answer, chat ID in SQLite |
+| `service.log` | Event connection, job starts, results, errors |
+| `logs/linear-completion.log` | Linear completion checks |
 
-The initial configuration requests all four history scopes plus `reactions:read`. To reduce access, edit `scopes` in the local configuration before entering a token with the same reduced scope set. Slack can add the implicit `identify` scope. The check accepts this documented identity scope and rejects all other extra scopes. The initial setup accepts no Slack write permission. Optional progress markers use only the user scope `reactions:write`, after explicit approval and reinstallation.
-
-A user token can access public conversations and private conversations its user belongs to, within its scopes. Retention, deletion, workspace policy, and changes to membership can prevent retrieval. This program does not join channels or invite a bot. File attachments are included as message metadata when Slack returns them; their contents are not downloaded.
-
-This version accepts a workspace user token without token rotation. It does not request or store a client secret or refresh token. If your workspace requires rotating tokens, stop setup and add the official refresh flow before enabling the service. Expired or revoked tokens cause read failures; they do not grant additional access.
-
-## First Live Check and Review
-
-```sh
-slack-codex check
-slack-codex poll
-```
-
-`check` reports your identity, granted scopes, and matching channel/message/emoji identifiers. `poll` reads all reaction pages and saves the first baseline. Neither command invokes Codex.
-
-Choose one matching message from `check`. Use its channel ID and timestamp as the two arguments to `slack-codex dry-run`. For the default emoji, no emoji argument is needed. For another mapping, add `--emoji` and the Slack emoji name without colons.
-
-The dry run checks that you added that exact reaction. It fetches the selected message, its parent, and all thread pages. It prints the thread and saves the exact prompt, command, configuration digest, and review ID under `reviews/`. No model runs and no Slack writes occur.
-
-Review that result. Only after the user approves it, run `slack-codex approve` with its review ID. Then use `slack-codex resume` to load the service. Code, configuration, and skill changes invalidate approval and require another dry run.
-
-For an explicit test of an existing baseline item, use `slack-codex status` to find its job ID. Run `slack-codex rerun` with that ID, then `slack-codex run-job` with the same ID while the service is paused. This starts one real model run and requires dry-run approval. It does not enable the service. Confirm the saved session opens in the desktop app before accepting the installation as fully verified.
-
-## Multiple Workflows
-
-Edit `~/Library/Application Support/slack-codex/config.json`. Each key under `workflows` is a Slack emoji name without colons. Each mapping has:
-
-| Field | Purpose |
-|---|---|
-| `project` | Absolute working-folder path |
-| `skill` | Absolute path to the workflow's SKILL.md |
-| `instructions` | Trusted standing task instructions |
-| `sandbox` | `read-only` or `workspace-write` |
-
-Each new emoji gets its own baseline on the first complete scan. Existing reactions for that emoji do not launch agents. A job keeps the workflow configuration from discovery. If that configuration changes, the job stops until a manual rerun captures the new configuration. Changing the skill also requires new dry-run approval.
-
-Pause before changing configuration. The initial skill only answers queries. It writes no Slack replies. The initial sandbox is read-only. Use workspace-write only for a workflow that needs project edits.
-
-## State and Recovery
-
-The trigger key is `(workspace, user, channel, message timestamp, emoji)`. The message timestamp identifies a message only. It is never treated as a reaction time. Multiple duplicate Slack results collapse to one key. Removing and adding the same reaction does not trigger a second run. An explicit manual rerun can repeat work.
-
-Every poll scans all pages. There is no timestamp cutoff and no assumption about reaction order. If a message is very old, a new reaction still queues it after the baseline. A complete scan commits discoveries and baseline flags in one SQLite transaction. A failed scan commits neither.
-
-Cursor pagination is preferred. Legacy page metadata is supported when returned without cursor metadata. A repeated cursor, an incomplete response without a cursor, or the legacy page limit causes an error, rather than a false complete scan. Concurrent Slack changes can shift pages; later full scans can find reactions that remain present. Slack does not provide an atomic snapshot here.
-
-After sleep or a network outage, the next full scan finds remaining reactions. Polling can miss a reaction added and removed between checks. The first baseline suppresses all reactions present during that scan, including reactions added before that initial scan completes.
-
-One worker runs at a time. A local file lock excludes a second service or manual worker. Fetch failures retry up to three times with a delay. HTTP requests have a 30 second timeout, up to three attempts, and honor `Retry-After`. Each Codex run has a configurable timeout, initially 30 minutes.
-
-Before starting a child, SQLite records the run as running. An uncertain launch after a crash becomes `interrupted`. The queue enters a recovery hold. Inspect the run files and any surviving Codex process, then use `slack-codex clear-recovery` while paused. Rerun interrupted jobs explicitly if needed. This protects against duplicate launches at the cost of manual action when a crash occurs between the database commit and process start. It does not claim exactly-once side effects.
-
-Codex failures and timeouts require a manual rerun. They never cause an automatic second model run. Manual reruns reset the fetch-attempt count but retain all past run records.
-
-## Codex Execution and Credentials
-
-The installed CLI was checked at version 0.164.0. The worker uses `codex exec`, stdin, `--json`, `--output-last-message`, an explicit project folder, and an explicit sandbox. It retains the local Codex session and saves its ID from the `thread.started` event. There is no `--ephemeral` flag.
-
-Approval policy is explicitly `on-request`. No bypass or automatic approval flag is used. Unattended runs cannot supply human approval. If a task needs approval, inspect its local session and continue it interactively. The command ignores the user config to avoid inheriting unrelated MCP tools. Apps are disabled for the run. Workspace shell network access is disabled. This still permits Codex itself to contact the model service.
-
-The selected Slack content travels to the model when a real job runs. Polling and dry runs make only Slack requests. The worker never passes the Slack token in prompts, command arguments, or the child environment. Its child environment uses a small allowlist. Slack API errors exclude raw response bodies and credential-bearing URLs.
-
-The token stays in macOS Keychain under service `local.slack-codex`, account `slack-user`. The worker uses the native keyring backend, without a plaintext fallback. macOS may ask you to allow Keychain access. The process still runs as your user: this is not a separate operating-system account or a guarantee that all of your other local credentials are unreadable. Keep the read-only default and do not grant broader access to untrusted work.
-
-## Files and Commands
-
-All runtime data is under `~/Library/Application Support/slack-codex/`, outside the repository. New files use owner-only permissions.
-
-| File or Folder | Contents |
-|---|---|
-| `config.json` | Emoji mappings, scopes, Slack IDs, CLI path, timeout |
-| `state.sqlite3` | Job keys, statuses, attempts, errors, and run history |
-| `reviews/` | Live dry-run context and exact launch preview |
-| `approval.json` | Approved review and configuration digest |
-| `runs/` | Context, prompt, output events, final structured answer, error log |
-| `service.log` | Poll results and controlled operational errors |
-
-The launchd file is `~/Library/LaunchAgents/local.slack-codex.plist`. It contains no token. The service starts after user login only when loaded. This program does not publish a remote repository.
+Keychain service `local.slack-codex` holds accounts `slack-user`, `slack-app`,
+and `linear-read`. The user token grants `reactions:read`, `reactions:write`,
+`channels:history`, `groups:history`, `im:history`, and `mpim:history`, plus
+Slack's implicit `identify`. The app token grants only `connections:write`.
+The Linear key is read-only. Agent replies and issue creation use Jesse's
+existing connected apps. The worker user token has no `chat:write` scope.
 
 ```sh
 slack-codex status
 slack-codex pause
 slack-codex resume
-slack-codex uninstall
-slack-codex forget-token
-tail -n 100 -f "$HOME/Library/Application Support/slack-codex/service.log"
+slack-codex rerun JOB_ID
+uv run python linear_sync.py status
+uv run python chat_archive.py status
+tail -f "$HOME/Library/Application Support/slack-codex/service.log"
 ```
 
-`rerun` takes a job ID. `run-job` takes a job ID and runs it once while paused. `approve` takes a review ID. `clear-recovery` removes the queue hold after you check an interrupted run.
+`pause` and `resume` control both reaction workflows together. They leave the
+separate Linear completion service running. A rerun explicitly permits another
+run for that message and emoji, and keeps the old run records. When the service
+is paused, `slack-codex run-job JOB_ID` runs only that queued job.
 
-Use the session ID in `status` with `codex resume` to inspect a run in the CLI. Desktop app visibility must also be checked with the first approved live run. No claim is made that a local Codex session becomes a separate cloud ChatGPT conversation.
-
-`uninstall` unloads the service and removes its launchd file. It retains the token and audit files. Use `forget-token` to remove the Keychain entry, and revoke the app in Slack to invalidate the token. Remove the repository, command link, and runtime folder only when you no longer need their contents.
-
-## Rate Limits and Socket Mode
-
-The Slack documentation checked on 2026-11-04 lists `reactions.list` at Tier 2 (20+ requests per minute), and `reactions.get` and `conversations.replies` at Tier 3 (50+ requests per minute). Requests are paced by method; HTTP 429 responses override that pacing. The page size is 200. Large reaction histories can require enough pages that a scan takes longer than 60 seconds. The service logs scan time and warns above 55 seconds. It never overlaps scans.
-
-If a live scan is too expensive, use a user `reaction_added` event subscription over Socket Mode. The program would filter the event's `user` and `reaction`, acknowledge it promptly, and use the same SQLite queue. Socket Mode also needs an app-level token with `connections:write`; that is separate from the user history scopes. User event subscriptions avoid per-channel bot invitations. Reconnect gaps still need an explicit recovery plan, such as a reconciliation scan. This version does not request that token or enable events.
-
-## Verification
+To pause or resume the separate completion service:
 
 ```sh
-uv run python -m unittest discover -s tests -v
+launchctl bootout "gui/$(id -u)/local.slack-codex.linear-completion"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.slack-codex.linear-completion.plist"
 ```
 
-Tests use fake Slack responses and small local child programs. They spend no model tokens. Live Slack access, desktop session visibility, and a real agent run are separate installation checks.
+To uninstall, run `slack-codex uninstall`, unload the completion service with the
+command above, and remove its plist from `~/Library/LaunchAgents/`. Runtime
+records and Keychain credentials are retained. Remove those entries in Keychain
+Access and revoke the Slack app and Linear key when they are no longer needed.
+
+## Setup and Verification
+
+Use `uv sync --locked` to install dependencies. `slack-codex init --project PATH`
+creates initial configuration. Set `transport` to `socket-mode`, `slack_app_id`,
+and each workflow's `execution`, `desktop_project_id`, and
+`app_server_project_id` for this installation. Read the app-server `project/list`
+response to obtain the last value. Do not substitute an app tools project ID.
+
+Create or reuse the Slack app with the user scopes above. Enable Socket Mode,
+then subscribe to `reaction_added` under events on behalf of users. Leave bot
+events empty. Store the user token with `slack-codex credential` at its hidden
+terminal prompt. Store the app token in the Keychain account described above;
+never paste a token into chat, source, logs, or shell arguments.
+
+Use `slack-codex check`, `slack-codex poll`, and
+`slack-codex dry-run CHANNEL MESSAGE_TS --emoji EMOJI` for read-only checks.
+A successful dry run records validation automatically. No separate user approval
+step is required. Code, config, or skill edits require new validation before a
+service restart. `slack-codex install-service` writes the launchd file;
+`slack-codex resume` loads it. The current Mac already has both services installed.
+
+```sh
+uv run --with pytest pytest -q
+```
+
+Tests cover attribution, pagination, baseline suppression, event deduplication,
+restart recovery, reaction-on-reply context, concurrent workflows, retry bounds,
+and deterministic archive timing. Unit tests use no model tokens. Live tests
+verified both event types, app-visible chats, connected reads, and local helpers.
+
+Native Slack Later/to-do updates remain unsupported. A checkmark or removal of
+an inbox reaction does not itself complete a native Slack Later item. This
+project does not claim that integration is active.
 
 ## Sources
 
-- [Slack reactions.list](https://docs.slack.dev/reference/methods/reactions.list/): attribution, duplicate items, pagination, and Tier 2.
-- [Slack reactions.get](https://docs.slack.dev/reference/methods/reactions.get/): selected message and reaction attribution.
-- [Slack conversations.replies](https://docs.slack.dev/reference/methods/conversations.replies/): thread pagination and history scopes.
-- [Slack conversations.history](https://docs.slack.dev/reference/methods/conversations.history/): user-token visibility.
-- [Slack OAuth](https://docs.slack.dev/authentication/installing-with-oauth/): user-scoped tokens.
-- [Slack rate limits](https://docs.slack.dev/apis/web-api/rate-limits/): per-method limits and Retry-After.
-- [Codex noninteractive mode](https://learn.chatgpt.com/docs/non-interactive-mode): CLI execution, stdin, sandbox flags, and saved output.
+- [Slack Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/)
+- [Slack reaction_added](https://docs.slack.dev/reference/events/reaction_added/)
+- [Slack reactions.list](https://docs.slack.dev/reference/methods/reactions.list/)
+- [Slack conversations.replies](https://docs.slack.dev/reference/methods/conversations.replies/)
+- [Slack rate limits](https://docs.slack.dev/apis/web-api/rate-limits/)
+- [Codex app-server](https://learn.chatgpt.com/docs/app-server)
 
-Slack adds [identify](https://docs.slack.dev/reference/scopes/identify/) in the background for user tokens. The live installation returned this scope with the five requested read scopes.
-
-## Optional Progress Markers
-
-The custom emoji `codex_working` means **Codex work in progress**. Its rotating OpenAI Blossom logo is in `assets/codex_working.gif`. The source is `scripts/make_emoji.py`.
-
-After the user approves `reactions:write` and reinstalls the Slack app, store the updated token. Add that scope to the local `scopes` list and set `status_reactions` to true. These changes require a new dry run and approval before the service starts.
-
-A newly received job queues a progress marker. The worker removes an earlier completion mark and adds `codex_working`. On a completed result, it adds `white_check_mark` and removes `codex_working`. Failed, blocked, interrupted, and timed-out work retains the progress marker. Only your own reactions can be removed with your user token.
-
-Reaction updates use their own SQLite queue. They retry up to three times without rerunning the agent. The agent must return a structured result with `status` equal to `completed`, `blocked`, or `failed`. A successful process exit alone cannot produce a completion mark. The Slack methods remain restricted to reads plus `reactions.add` and `reactions.remove`; message posting is unavailable.
-
-## Desktop Project Routing Status
-
-The selected live task was created in the local desktop project named **Slack**, with working folder `/Users/Jesse/Projects/resolution`. The configuration records its project ID. Job 1 is marked `dispatched` and linked to that chat, which prevents a second automatic launch.
-
-The current CLI worker does not yet apply this desktop project ID to future sessions. Its documented launch options set the working folder but do not select a named desktop project. Background activation stays paused until project routing is implemented and verified. Do not treat the stored project ID as proof that automatic routing works.
-
-The OpenAI Blossom belongs to OpenAI. The source SVG comes from the [OpenAI Cookbook](https://github.com/openai/openai-cookbook/blob/main/examples/voice_solutions/realtime_translation_guide/livekit-translation-demo/public/brand/chatgpt-blossom-black.svg). The GIF rotates clockwise once every two seconds. To rebuild it on this Mac:
-
-```sh
-uv run --with pillow --with cairosvg env DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib python scripts/make_emoji.py
-```
-
-Additional Slack emoji: `claude_working` is a rotating Anthropic lettermark. `claude_static` and `codex_static` are still logos. The Anthropic vector comes from [Simple Icons](https://github.com/simple-icons/simple-icons/blob/develop/icons/anthropic.svg); the mark belongs to Anthropic. These emoji do not add a Claude workflow.
-
-## Inbox Intake
-
-Jesse's `inbox_tray` reaction selects the `slack-to-linear` skill. The agent uses
-connected Linear tools to select the team and project, check for an existing
-issue, save useful task details and the Slack source link, and verify the issue.
-It then sends one AI4-labeled reply in the containing Slack thread with the issue
-link. This authorizes intake only, not execution of the task in the message.
-
-The configured chat destination is the desktop **Linear** project
-(`baebc3b6-29be-4612-a563-37828ca8d2c9`). Its local folder is this repository.
-This workflow requires desktop connected apps. The CLI runner stops before
-launching it. Automatic desktop dispatch is not implemented, so this mapping
-is configured but not live. The background service remains off.
-
-A live read-only preview uses:
-
-```sh
-slack-codex dry-run CHANNEL MESSAGE_TIMESTAMP --emoji inbox_tray
-```
-
-The saved review includes the full context, standing prompt, and destination
-project ID. Its CLI command is null because the CLI does not provide this
-execution path. An authorized desktop chat can use this review and the installed
-skill for a manual test. Record its chat ID and outcome in the SQLite run log.
-The first full poll establishes a separate baseline for inbox reactions.
-Existing inbox reactions do not start tasks without an explicit test or rerun.
-The Slack OAuth token still has only read scopes. Desktop completion replies use
-the connected Slack app; no additional OAuth scope has been granted to the worker.
-
-## Requested To-do Behavior
-
-Jesse wants inbox intake to add the selected message to his Slack to-dos.
-A `white_check_mark` reaction on that message, including a reaction from another
-agent, should complete its to-do. Issue intake alone must not add a checkmark:
-it creates a task to do, and does not complete that task. The reaction worker
-now removes only the work marker when Linear intake completes.
-
-Automatic native to-do sync is not implemented. Slack's official stars API does
-not affect Later, and the connected Slack tools cannot add or complete native
-to-dos. See https://docs.slack.dev/changelog/2023-07-its-later-already-for-stars-and-reminders/.
-A supported Later API or a separate UI execution path is needed. Socket Mode
-can deliver checkmark events but does not supply a Later write API. Do not add
-legacy stars scopes or report a local database entry as a saved Slack to-do.
-The first intake test message already had a native to-do; it remains open.
-
-## Linear Completion Check
-
-`linear_sync.py` is a separate deterministic worker. Every five minutes it reads
-only registered Linear issues, in batches of up to 25. A completed issue causes
-it to add `white_check_mark` to the original Slack message and remove Jesse's
-`inbox_tray` reaction from that same message. It never reacts to the generated
-Linear-link reply. Canceled issues do not count as completed. The worker does
-not change native Slack to-dos, which still lack a supported API.
-
-SQLite stores the issue/message mapping, last state, successful notification,
-retry count, and errors. Successful links are not notified again after restart
-or issue reopening. Slack failures retry at most three times. An issue must
-remain completed until a check sees it. Completion by any editor counts; the
-worker checks issue state, not the identity of the editor. Linear API errors
-produce no Slack writes. No model is called, and no credential enters an agent
-prompt or subprocess environment.
-
-Setup, from this repository:
-
-1. Create a personal Linear API key in Settings, Security & access. Give it
-   read-only access to the teams with linked issues. Enter it locally with
-   `uv run python linear_sync.py credential`. Input is hidden. The key is stored
-   in macOS Keychain under `local.slack-codex`, account `linear-read`.
-2. Run `uv run python linear_sync.py check` for a read-only preview.
-3. Finish the pending Slack `reactions:write` authorization and update the user
-   token through the existing secure credential command. Review the preview
-   before setting `linear_completion_enabled` to true in local config.
-4. Start `uv run python linear_sync.py serve` only after this setup is complete.
-   A native launchd service can use the same command after review.
-
-Commands: `status` shows links and errors; `retry` resets failed pending links;
-`sync` makes one live check; `check` is read-only. Use `link ISSUE-UUID SLACK-URL`
-to register another source message. The intake skill registers future issues.
-HIRE-235 is registered. Polling is local and has no public webhook receiver.
-Linear recommends webhooks for larger integrations:
-https://linear.app/developers/rate-limiting.
+The local CLI's generated experimental schema is the source for `projectId` and
+local dynamic tools. These experimental interfaces can change after an update;
+project, sandbox, and approval checks fail closed when the result differs.
