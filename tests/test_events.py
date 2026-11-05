@@ -1,5 +1,7 @@
 import threading
 
+import pytest
+
 import codex_rpc
 import event_worker as worker
 import slack_codex as app
@@ -158,11 +160,78 @@ def test_fetch_failures_are_bounded(tmp_path):
     )
 
 
-def test_project_and_sandbox_are_explicit(tmp_path):
+def test_runner_receives_request_title_without_changing_configuration(tmp_path):
+    c = config(tmp_path)
+    db = worker.database(tmp_path)
+    worker.accept(db, c, event())
+    titles = []
+
+    class Slack:
+        def thread(self, *args, **kwargs):
+            return {"selected_message": {"text": "Add news RSS feeds"}, "messages": []}
+
+    def runner(c, workflow, *args):
+        titles.append(workflow["title"])
+        return "succeeded", None
+
+    worker.run_one(tmp_path, c, db, Slack(), "robot_face", threading.Event(), runner)
+    assert titles == ["Slack task: Add news RSS feeds"]
+    assert "title" not in c["workflows"]["robot_face"]
+    db.close()
+
+
+@pytest.mark.parametrize(
+    ("sandbox", "approval"),
+    [("read-only", "on-request"), ("danger-full-access", "never")],
+)
+def test_project_and_sandbox_are_explicit(tmp_path, sandbox, approval):
     w = config(tmp_path)["workflows"]["robot_face"]
+    w["sandbox"] = sandbox
     params = codex_rpc.start_params(w)
     assert params["projectId"] == "P"
-    assert params["sandbox"] == "read-only"
-    assert params["approvalPolicy"] == "on-request"
+    assert params["sandbox"] == sandbox
+    assert params["approvalPolicy"] == approval
     assert params["approvalsReviewer"] == "user"
     assert params["ephemeral"] is False
+
+
+def test_blocked_job_removes_spinner_without_checkmark(tmp_path):
+    c = config(tmp_path)
+    c["status_reactions"] = True
+    db = worker.database(tmp_path)
+    worker.accept(db, c, event())
+    calls = []
+
+    class Slack:
+        def thread(self, *args, **kwargs):
+            return {"messages": []}
+
+        def call(self, method, **params):
+            calls.append((method, params["name"]))
+
+    def runner(*args):
+        return "blocked", "Permission needed"
+
+    worker.run_one(tmp_path, c, db, Slack(), "robot_face", threading.Event(), runner)
+    app.sync_reactions(db, c, Slack())
+    assert calls == [("reactions.remove", "codex_working")]
+    assert db.execute("SELECT status FROM jobs").fetchone()[0] == "blocked"
+
+
+def test_recovery_clears_old_spinner(tmp_path):
+    c = config(tmp_path)
+    c["status_reactions"] = True
+    db = worker.database(tmp_path)
+    worker.accept(db, c, event())
+    with db:
+        db.execute("UPDATE jobs SET status='running'")
+    worker.recover(db)
+    assert db.execute("SELECT desired FROM reaction_updates").fetchone()[0] == "stopped"
+
+
+def test_service_environment_finds_user_tools_without_secrets(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("SLACK_TOKEN", "secret-for-test")
+    env = app.clean_env()
+    assert str(app.Path.home() / ".local/bin") in env["PATH"].split(":")
+    assert "SLACK_TOKEN" not in env

@@ -9,12 +9,64 @@ import time
 
 import slack_codex as app
 
+APPROVAL_LOCK = threading.Lock()
+APPROVAL_SCRIPT = """on run argv
+    set resultDialog to display dialog (item 1 of argv) with title "Slack agent permission" buttons {"Decline", "Allow once"} default button "Decline" cancel button "Decline" giving up after 300
+    if gave up of resultDialog then return "decline"
+    if button returned of resultDialog is "Allow once" then return "accept"
+    return "decline"
+end run
+"""
+
+
+def command_approval(params):
+    """Ask the person. A missing, failed, or expired dialog never grants access."""
+    decisions = params.get("availableDecisions")
+    if decisions is not None and "accept" not in decisions:
+        return "cancel"
+    command = params.get("command")
+    if not command or params.get("kind", "command") != "command":
+        return "cancel"
+    message = (
+        "A Slack agent needs permission for this command.\n\n"
+        + (params.get("reason") or "The command requires approval.")
+        + "\n\nFolder: "
+        + (params.get("cwd") or "Unknown")
+        + "\n\nCommand:\n"
+        + command
+        + "\n\nAdditional permissions:\n"
+        + json.dumps(params.get("additionalPermissions"), indent=2)
+        + "\n\nNetwork access request:\n"
+        + json.dumps(params.get("networkApprovalContext"), indent=2)
+        + "\n\nAllow once applies only to this request."
+    )
+    # Do not hide part of the command in the permission dialog.
+    if len(message) > 6000:
+        return "cancel"
+    with APPROVAL_LOCK:
+        try:
+            result = subprocess.run(
+                ["/usr/bin/osascript", "-", message],
+                input=APPROVAL_SCRIPT,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=310,
+                env=app.clean_env(),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return "cancel"
+    if result.returncode == 0 and result.stdout.strip() == "accept":
+        return "accept"
+    return "decline" if decisions is None or "decline" in decisions else "cancel"
+
 
 class Rpc:
     def __init__(self, codex, log=None):
         self.events = queue.Queue()
         self.next_id = 0
         self.log = log
+        self.owned_threads = set()
         self.proc = subprocess.Popen(
             [codex, "app-server"],
             stdin=subprocess.PIPE,
@@ -67,11 +119,18 @@ class Rpc:
             if item.get("id") == request_id and "method" not in item:
                 if "error" in item:
                     raise app.Error("Codex request failed: " + item["error"]["message"])
+                if method == "thread/start":
+                    self.owned_threads.add(item["result"]["thread"]["id"])
                 return item["result"]
             if "id" in item and "method" in item:
                 raise app.Error("Codex needs user input. Continue the chat in the app.")
 
     def close(self):
+        for thread_id in self.owned_threads:
+            try:
+                self.call("thread/unsubscribe", {"threadId": thread_id}, timeout=5)
+            except (app.Error, OSError):
+                pass
         self.proc.terminate()
         try:
             self.proc.wait(timeout=5)
@@ -119,7 +178,9 @@ def start_params(workflow, ephemeral=False):
         "cwd": workflow["project"],
         "runtimeWorkspaceRoots": [workflow["project"]],
         "sandbox": workflow["sandbox"],
-        "approvalPolicy": "on-request",
+        "approvalPolicy": "never"
+        if workflow["sandbox"] == "danger-full-access"
+        else "on-request",
         "approvalsReviewer": "user",
         "ephemeral": ephemeral,
         "config": {
@@ -143,9 +204,13 @@ def run(c, workflow, prompt, output, on_started, stop):
         on_started(thread_id)
         if thread.get("projectId") != workflow["app_server_project_id"]:
             raise app.Error("Codex did not use the selected project.")
-        if result.get("approvalPolicy") != "on-request":
-            raise app.Error("Codex did not retain user approvals.")
-        expected = {"read-only": "readOnly", "workspace-write": "workspaceWrite"}
+        if result.get("approvalPolicy") != start_params(workflow)["approvalPolicy"]:
+            raise app.Error("Codex did not apply the selected approval policy.")
+        expected = {
+            "read-only": "readOnly",
+            "workspace-write": "workspaceWrite",
+            "danger-full-access": "dangerFullAccess",
+        }
         if result.get("sandbox", {}).get("type") != expected[workflow["sandbox"]]:
             raise app.Error("Codex did not apply the selected sandbox.")
         rpc.call(
@@ -229,6 +294,14 @@ def run(c, workflow, prompt, output, on_started, stop):
                         ],
                     }
                 rpc.send({"id": event["id"], "result": reply})
+                continue
+            if event.get("method") == "item/commandExecution/requestApproval":
+                rpc.send(
+                    {
+                        "id": event["id"],
+                        "result": {"decision": command_approval(params)},
+                    }
+                )
                 continue
             if "id" in event and "method" in event:
                 # Preserve approvals. Leave this task for the user in its chat.

@@ -98,6 +98,10 @@ def recover(db):
             "UPDATE runs SET status='interrupted',finished=? WHERE status='running'",
             (time.time(),),
         )
+        for row in db.execute(
+            "SELECT id FROM jobs WHERE status IN ('blocked','failed','interrupted')"
+        ):
+            app.queue_reaction(db, row["id"], "stopped")
 
 
 def run_one(home, c, db, slack, emoji, stop, runner=codex_rpc.run, job_id=None):
@@ -153,7 +157,8 @@ def run_one(home, c, db, slack, emoji, stop, runner=codex_rpc.run, job_id=None):
         LOG.info("job=%s chat=%s started", job["id"], thread_id)
 
     try:
-        status, error = runner(c, workflow, prompt, output, started, stop)
+        titled_workflow = {**workflow, "title": app.chat_title(workflow, context)}
+        status, error = runner(c, titled_workflow, prompt, output, started, stop)
     except Exception as e:  # noqa: BLE001, isolate worker failures
         status, error = (
             "failed",
@@ -167,8 +172,10 @@ def run_one(home, c, db, slack, emoji, stop, runner=codex_rpc.run, job_id=None):
         db.execute(
             "UPDATE jobs SET status=?,error=? WHERE id=?", (status, error, job["id"])
         )
-        if status == "succeeded" and c.get("status_reactions"):
-            app.queue_reaction(db, job["id"], "done")
+        if c.get("status_reactions"):
+            app.queue_reaction(
+                db, job["id"], "done" if status == "succeeded" else "stopped"
+            )
     LOG.info("job=%s status=%s", job["id"], status)
     return True
 

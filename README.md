@@ -5,6 +5,9 @@ receives user reaction events and saves jobs in SQLite. Listening, reconnect
 scans, Linear completion checks, and archive checks use no model tokens.
 Only a new matching reaction or an explicit rerun starts an agent.
 
+This is a macOS personal prototype, not a shared supported installation.
+See [packaging notes](PACKAGING.md) for proposed shared use and open decisions.
+
 ## Workflows
 
 | Reaction | Skill | App Project | Working Folder |
@@ -17,10 +20,14 @@ Slack thread. It asks Jesse about material ambiguity. The intake skill finds
 or creates the right Linear issue and posts one short linked receipt. Both
 apply Jesse's AI4 rule to replies sent without review of the exact text.
 
+New chats use the selected request as their initial title. Forwarded email
+subjects and text appear in a readable excerpt before the full JSON context.
+The agent then sets a short task title from the original request and thread.
+
 Each workflow has one agent slot. The two workflows can run at the same time.
 More requests for one workflow wait in its queue. Each run has a 30-minute
-limit by default. Existing sandbox and tool approval rules still apply. If a
-run needs approval, it stops with a saved chat that Jesse can continue in the app.
+limit by default. Existing sandbox and tool approval rules still apply. Command approvals use the local permission dialog. Other approval or question
+types stop the run for manual handling. App continuation is not yet reliable.
 
 The worker adds `codex_working` on the original selected message. It adds
 `white_check_mark` after a query and its required reply succeed. Issue intake
@@ -60,13 +67,30 @@ The installed Codex CLI, version 0.164.0, exposes project assignment through
 its experimental app-server protocol. The worker uses `codex app-server` over
 stdin with `thread/start`, `projectId`, and `turn/start`. The project IDs from
 that protocol differ from the app tools' saved-project IDs; configuration stores
-both. Each chat is persistent and visible in the app. Live checks verified both
-project destinations and the connected Slack and Linear tools.
+both. The required routes are `robot_face` to Slack and `inbox_tray` to Linear.
+Each chat is persistent. The app-server project records also carry the matching
+`codex.localProjectId` metadata.
 
-Each chat receives an explicit folder, `read-only` sandbox, and `on-request`
-approval policy with a human reviewer. No bypass flag or automatic approval
-setting is used. Connected app tools remain available. Shell network access
-stays off. Unrelated configured local MCP servers are disabled for these runs.
+The current desktop app does not reliably use app-server membership for its
+sidebar. It can put a new chat under the working folder's project instead.
+The worker's project ID check does not verify sidebar placement. Existing chats
+can be corrected with the app's Move to project action. Automatic sidebar
+placement still needs a supported desktop integration. Connected Slack and
+Linear tools passed the live read checks.
+
+New configuration defaults to `read-only` with `on-request` approval.
+`workspace-write` also uses `on-request`. An existing configuration can explicitly
+select `danger-full-access`, which uses `never` and permits unrestricted file and
+network access. This is not the default and is not needed to install the listener.
+Connected app tools remain available. Unrelated local MCP servers are disabled.
+
+For workflows with `on-request`, command approval requests show a macOS dialog with the reason, command, folder,
+and requested permissions. Only an explicit Allow once response grants access.
+Decline, a dialog error, or a five-minute timeout grants no access. Requests
+that cannot be shown in full stop the run. The worker releases its app-server
+subscription before exiting. Other approval and question types still stop the
+run for manual handling. The dialog logic has unit tests; its live permission
+flow still needs a human check.
 
 Slack text is JSON task data. It never enters shell interpolation. Standing
 workflow instructions define authority. The worker passes no Slack or Linear

@@ -3,3 +3,13 @@ __pycache__/
 *.egg-info/
 .DS_Store
 slack-app-review.png
+
+.pytest_cache/
+.ruff_cache/
+dist/
+.env
+.env.*
+*.sqlite3*
+config.json
+credentials.json
+/pr-*.md
