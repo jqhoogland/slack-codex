@@ -1,0 +1,33 @@
+{
+  "codex": "/REPLACE_WITH_ABSOLUTE_CODEX_PATH",
+  "transport": "socket-mode",
+  "slack_app_id": "REPLACE_WITH_SLACK_APP_ID",
+  "timeout_seconds": 1800,
+  "status_reactions": false,
+  "linear_completion_enabled": false,
+  "scopes": ["reactions:read", "channels:history", "groups:history", "im:history", "mpim:history"],
+  "workflows": {
+    "robot_face": {
+      "action": "respond",
+      "execution": "desktop",
+      "project": "/REPLACE_WITH_WORKING_FOLDER",
+      "skill": "/REPLACE_WITH_PERSONAL_SKILL_FOLDER/respond-to-queries/SKILL.md",
+      "sandbox": "read-only",
+      "desktop_project_id": "REPLACE_WITH_DESKTOP_SLACK_PROJECT_ID",
+      "app_server_project_id": "REPLACE_WITH_APP_SERVER_SLACK_PROJECT_ID",
+      "title": "Slack query",
+      "instructions": "Use the configured skill to handle the selected request. Ask about material ambiguity and respect required tool approvals."
+    },
+    "inbox_tray": {
+      "action": "linear_intake",
+      "execution": "desktop",
+      "project": "/REPLACE_WITH_WORKING_FOLDER",
+      "skill": "/REPLACE_WITH_PERSONAL_SKILL_FOLDER/slack-to-linear/SKILL.md",
+      "sandbox": "read-only",
+      "desktop_project_id": "REPLACE_WITH_DESKTOP_LINEAR_PROJECT_ID",
+      "app_server_project_id": "REPLACE_WITH_APP_SERVER_LINEAR_PROJECT_ID",
+      "title": "Slack to Linear",
+      "instructions": "Use the configured skill to create or find the relevant Linear issue and reply with its link. Do not execute the underlying task."
+    }
+  }
+}

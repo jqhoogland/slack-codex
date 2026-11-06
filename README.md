@@ -225,6 +225,10 @@ Access and revoke the Slack app and Linear key when they are no longer needed.
 
 ## Setup and Verification
 
+For another person, start with the [agent setup guide](docs/AGENT_SETUP.md) and
+[configuration example](docs/config.example.json). Do not reuse Jesse's runtime
+configuration. The guide includes required checks and conditions that block activation.
+
 Use `uv sync --locked` to install dependencies. `slack-codex init --project PATH`
 creates initial configuration. Set `transport` to `socket-mode`, `slack_app_id`,
 and each workflow's `execution`, `desktop_project_id`, and
