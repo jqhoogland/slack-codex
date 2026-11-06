@@ -8,6 +8,7 @@ import fcntl
 import getpass
 import hashlib
 import html
+import http.client
 import json
 import logging
 import os
@@ -208,7 +209,7 @@ class Slack:
                     time.sleep(2**attempt)
                     continue
                 raise Error(f"Slack {method}: HTTP {e.code}") from None
-            except (urllib.error.URLError, TimeoutError, ValueError):
+            except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError):
                 if attempt == 2:
                     raise Error(
                         "Slack request failed or response was invalid."

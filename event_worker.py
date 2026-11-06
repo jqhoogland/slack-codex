@@ -283,6 +283,8 @@ def serve(home, c, receive_only=False):
                         wake.set()
                     except app.Error as e:
                         LOG.error("Reconnect scan failed: %s", e)
+                        if not stop.wait(30):
+                            reconnect.set()
                 if time.monotonic() - last_archive_check >= 300:
                     last_archive_check = time.monotonic()
                     archive_db = chat_archive.database(home)
