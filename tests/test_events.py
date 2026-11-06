@@ -235,3 +235,53 @@ def test_service_environment_finds_user_tools_without_secrets(monkeypatch):
     env = app.clean_env()
     assert str(app.Path.home() / ".local/bin") in env["PATH"].split(":")
     assert "SLACK_TOKEN" not in env
+
+
+def test_custom_emoji_runs_configured_workflow_without_reply_authority(tmp_path):
+    c = config(tmp_path)
+    c["workflows"]["bookmark"] = {
+        **c["workflows"]["robot_face"],
+        "action": "custom",
+        "instructions": "Extract references, check duplicates, then save a local reading list. Do not post to Slack.",
+        "app_server_project_id": "READING",
+    }
+    db = worker.database(tmp_path)
+    assert worker.accept(db, c, event("bookmark", "CUSTOM")) == 1
+    received = []
+
+    class Slack:
+        def thread(self, *args, **kwargs):
+            return {"selected_message": {"text": "A paper to save"}, "messages": []}
+
+    def runner(c, workflow, prompt, output, started, stop):
+        received.append((workflow, prompt))
+        started("READING-CHAT")
+        return "succeeded", None
+
+    assert worker.run_one(
+        tmp_path, c, db, Slack(), "bookmark", threading.Event(), runner
+    )
+    workflow, prompt = received[0]
+    assert workflow["app_server_project_id"] == "READING"
+    assert "Extract references, check duplicates" in prompt
+    assert "Do not post to Slack." in prompt
+    assert "Carry out its clear implied actions and reply" not in prompt
+    assert "create or find the relevant Linear issue" not in prompt
+    assert worker.accept(db, c, event("bookmark", "READDED")) is None
+    assert db.execute("SELECT status FROM jobs").fetchone()[0] == "succeeded"
+    db.close()
+
+
+def test_new_emoji_gets_its_own_baseline(tmp_path):
+    c = config(tmp_path)
+    db = worker.database(tmp_path)
+    app.discover(db, c, {})
+    c["workflows"]["bookmark"] = {**c["workflows"]["robot_face"], "action": "custom"}
+    app.discover(db, c, {("C", "1.000001", "bookmark"): {}})
+    assert worker.accept(db, c, event("bookmark", "OLD")) is None
+    assert worker.accept(db, c, event("bookmark", "NEW", "2.000001")) is not None
+    assert [r[0] for r in db.execute("SELECT status FROM jobs ORDER BY id")] == [
+        "baseline",
+        "queued",
+    ]
+    db.close()

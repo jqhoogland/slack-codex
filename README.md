@@ -36,6 +36,49 @@ The separate Linear worker checks every five minutes. When the linked issue
 is completed, it adds a checkmark and removes `inbox_tray` on the original
 message, not the receipt. Canceled issues do not count as completed.
 
+## Add an Emoji Workflow
+
+The `workflows` object in local `config.json` maps Slack emoji names to workflows.
+Standard and custom Slack emojis use the same mechanism. Each mapping has its
+own skill, standing instructions, working folder, app project, and queue. The
+listener does not have a fixed list of supported emojis.
+
+Choose an action:
+
+| Action | Behavior |
+| --- | --- |
+| `respond` (default) | Carry out the selected request and reply in its thread |
+| `linear_intake` | Create or find an issue, post its link, and register completion checks |
+| `custom` | Follow only the configured instructions and skill |
+
+For example, add a `bookmark` mapping with `action: "custom"`. Its skill could
+extract references, check for duplicates, and save a reading list. It can require
+several steps or call other installed skills. It need not reply in Slack.
+
+To add a mapping:
+
+1. Write a skill with the allowed work, steps, outputs, and completion criteria.
+   State whether it may send messages or change external records.
+2. Pause the service. Copy a desktop workflow entry under the new emoji name,
+   without colons. Set `action` to `custom`, `skill` to the new SKILL.md path,
+   and `instructions` to the standing task. Set `project` to the working folder.
+3. Set `desktop_project_id` and `app_server_project_id` to the intended app
+   project IDs. Use `read-only` or `workspace-write` for `sandbox` as needed.
+   The desktop placement limitation described below still applies.
+4. Run a live `dry-run` with `--emoji` set to the new name, then resume.
+   The first scan baselines existing reactions for that emoji. Use `rerun`
+   explicitly if an existing baseline item should run.
+
+No runner changes or new Slack event subscriptions are needed for another
+emoji. The same message can launch different emoji workflows, each once.
+Removing and adding the same emoji again does not rerun it.
+
+A custom workflow runs its steps within one agent chat. This is not a separate
+pipeline scheduler with step-level retries or parallel subtask execution.
+Completion means the configured workflow is complete; the worker adds its
+standard checkmark. If the workflow only creates a task for later work, define
+that distinction before enabling it. Linear intake already handles that case.
+
 ## Event Delivery
 
 The Slack app is **Local Codex Reactions**, ID `A0CF1GM2FA8`, in Resolution.
